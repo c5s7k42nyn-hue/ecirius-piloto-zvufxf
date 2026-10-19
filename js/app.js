@@ -2,11 +2,13 @@
 (function () {
   'use strict';
   const PL = window.PaguuLogic;
+  const PC = window.PaguuConta;
   const KEY = 'paguu-pilot-v1';
+  let BOOK = null;
   let S = null;
   let DRAFT = {};
   let SIG = null;
-  let OPEN = { fac: true, ana: true, ope: true, ver: true, cfg: true };
+  let OPEN = { fac: true, ana: true, ope: true, con: true, ver: true, cfg: true };
   let factPage = 1;
   let factQ = '';
 
@@ -72,7 +74,8 @@
     { g: null, items: [['inicio', 'Inicio']] },
     { g: 'fac', title: 'FACTURACIÓN', items: [['clientes', 'Clientes'], ['proveedores', 'Proveedores'], ['facturas', 'Facturas'], ['recibidas', 'Recibidas'], ['relacion', 'Relación mensual'], ['cobros', 'Cobros y banco'], ['remesas', 'Remesas']] },
     { g: 'ana', title: 'ANÁLISIS', items: [['beneficios', 'Beneficios'], ['informes', 'Informes']] },
-    { g: 'ope', title: 'OPERATIVA', items: [['albaranes', 'Albaranes'], ['fin', 'Fin de mes'], ['stock', 'Stock y cuadre'], ['conta', 'Contabilidad']] },
+    { g: 'ope', title: 'OPERATIVA', items: [['albaranes', 'Albaranes'], ['fin', 'Fin de mes'], ['stock', 'Stock y cuadre']] },
+    { g: 'con', title: 'CONTABILIDAD', items: [['conta', 'Resumen'], ['plan', 'Plan de cuentas'], ['diario', 'Diario'], ['mayor', 'Mayor'], ['sumas', 'Sumas y saldos'], ['balance', 'Balance'], ['pyg', 'Pérdidas y ganancias'], ['tesoreria', 'Flujo de caja'], ['igic', 'Libro de IGIC'], ['amort', 'Amortizaciones'], ['concilia', 'Conciliación'], ['cierre', 'Cierre de ejercicio'], ['existencias', 'Existencias']] },
     { g: 'ver', title: 'VERIFACTU', items: [['verifactu', 'Cadena y registros'], ['actividad', 'Registro de actividad']] },
     { g: 'cfg', title: 'CONFIGURACIÓN', items: [['empresa', 'Empresa'], ['numeracion', 'Numeración'], ['importar', 'Importación']] }
   ];
@@ -521,16 +524,396 @@
       + '<div class="two" style="margin-top:8px"><div><label class="f">Origen</label><input name="origin" value="Gran Canaria"></div><div><label class="f">Fecha</label><input type="date" name="date" value="' + todayISO() + '"></div></div>'
       + '<button class="btn" style="margin-top:10px">Dar entrada</button></form>';
   };
-  VIEWS.conta = () => {
-    const t = PL.trial(S);
-    const ing = t.list.filter(a => a.code === '700' || a.code === '705').reduce((s, a) => s + a.saldoHaber, 0);
-    const gas = t.list.filter(a => a.code === '600').reduce((s, a) => s + a.saldoDebe, 0);
-    return head('Contabilidad', 'Diario derivado de facturas, cobros y compras. Módulo básico de demo: no son libros oficiales.')
-      + '<div class="kpis"><div class="card kpi"><div class="lbl">Ingresos</div><div class="val">' + money(ing) + '</div></div><div class="card kpi"><div class="lbl">Compras</div><div class="val">' + money(gas) + '</div></div><div class="card kpi"><div class="lbl">Resultado orientativo</div><div class="val">' + money(ing - gas) + '</div></div></div>'
-      + '<div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>Cuenta</th><th class="r">Debe</th><th class="r">Haber</th></tr></thead><tbody>'
-      + t.list.map(a => '<tr><td>' + esc(a.code) + ' ' + esc(a.name) + '</td><td class="r">' + money(a.saldoDebe) + '</td><td class="r">' + money(a.saldoHaber) + '</td></tr>').join('')
-      + '<tr><td><b>Sumas</b></td><td class="r"><b>' + money(t.debe) + '</b></td><td class="r"><b>' + money(t.haber) + '</b></td></tr></tbody></table></div>'
-      + (t.debe === t.haber ? '<p class="hint">El balance de sumas cuadra.</p>' : '<p class="badbox">Las sumas no cuadran.</p>');
+const CONTA_LINKS = [
+    ['conta', 'Resumen'], ['plan', 'Plan'], ['diario', 'Diario'], ['mayor', 'Mayor'], ['sumas', 'Sumas y saldos'],
+    ['balance', 'Balance'], ['pyg', 'PyG'], ['tesoreria', 'Tesorería'], ['igic', 'IGIC'], ['amort', 'Amortizaciones'],
+    ['concilia', 'Conciliación'], ['cierre', 'Cierre'], ['existencias', 'Existencias']
+  ];
+  const CONTA_MENU = [
+    ['plan', 'Plan de cuentas', 'PGC pyme editable, con cuentas de IGIC canario'],
+    ['diario', 'Diario', 'Factura, albarán, cobro, pago, stock y asientos manuales'],
+    ['mayor', 'Mayor', 'Movimientos y saldo de una cuenta'],
+    ['sumas', 'Sumas y saldos', 'Balance de comprobación del periodo'],
+    ['balance', 'Balance de situación', 'Activo, pasivo y patrimonio neto'],
+    ['pyg', 'Pérdidas y ganancias', 'Ingresos, gastos y resultado'],
+    ['tesoreria', 'Flujo de caja', 'Cobros, pagos y saldo de bancos'],
+    ['igic', 'Libro de IGIC', 'Modelo 420 orientativo, por validar con asesor'],
+    ['amort', 'Amortizaciones', 'Tabla lineal y asiento de cuota'],
+    ['concilia', 'Conciliación bancaria', 'Importar CSV y casar solo si cuadra'],
+    ['cierre', 'Cierre de ejercicio', 'Regularización, cierre y apertura'],
+    ['existencias', 'Existencias', 'Valor de stock enlazado a la 300 y la 610']
+  ];
+  function defaultYear() { return defaultMonth().slice(0, 4); }
+  function yearBounds(route) {
+    const ano = String(route.q.ano || defaultYear()).replace(/[^\d]/g, '').slice(0, 4) || defaultYear();
+    return { ano, desde: route.q.desde || (ano + '-01-01'), hasta: route.q.hasta || (ano + '-12-31') };
+  }
+  function contaNav(name) {
+    return '<nav class="subnav" aria-label="Contabilidad">' + CONTA_LINKS.map(([id, label]) =>
+      '<a href="#/' + id + '"' + (id === name ? ' class="on" aria-current="page"' : '') + '>' + label + '</a>').join('') + '</nav>';
+  }
+  function contaHead(name, title, sub, actions) {
+    return contaNav(name) + head(title, sub, actions);
+  }
+  function periodBar(route, path) {
+    const b = yearBounds(route);
+    const q = route.q.q ? '<input type="hidden" name="q" value="' + esc(route.q.q) + '">' : '';
+    const cuenta = route.q.cuenta ? '<input type="hidden" name="cuenta" value="' + esc(route.q.cuenta) + '">' : '';
+    return '<form class="card" data-form="periodo" data-path="' + path + '"><div class="filters">'
+      + '<div><label class="f">Ejercicio</label><input name="ano" inputmode="numeric" value="' + esc(b.ano) + '" aria-label="Ejercicio"></div>'
+      + '<div><label class="f">Desde</label><input type="date" name="desde" value="' + esc(b.desde) + '"></div>'
+      + '<div><label class="f">Hasta</label><input type="date" name="hasta" value="' + esc(b.hasta) + '"></div>'
+      + '<div><label class="f">Aplicar</label><button class="btn">Ver periodo</button></div></div>' + q + cuenta + '</form>';
+  }
+  function bookBtns() {
+    return '<button class="btn ghost sm" type="button" data-act="bookCsv">CSV</button><button class="btn ghost sm" type="button" data-act="bookPdf">PDF</button>';
+  }
+  function setBook(file, title, headers, rows, numericFrom) {
+    BOOK = { file, title, headers, rows, numericFrom: numericFrom == null ? headers.length : numericFrom, subtitle: S.company.name + ' · CIF ' + S.company.nif };
+  }
+  function srcLabel(src) {
+    return {
+      'auto-factura': 'Factura', 'auto-cobro': 'Cobro', 'auto-compra': 'Compra', 'auto-pago': 'Pago',
+      'auto-albaran': 'Albarán', 'auto-stock': 'Stock', manual: 'Manual', amort: 'Amortización',
+      cuadre: 'Cuadre', regularizacion: 'Regularización', cierre: 'Cierre', apertura: 'Apertura'
+    }[src] || src;
+  }
+  function accOpts(sel) {
+    return PC.chart(S).map(a => '<option value="' + esc(a.code) + '"' + (a.code === sel ? ' selected' : '') + '>' + esc(a.code + ' · ' + a.name) + '</option>').join('');
+  }
+  function periodQuery(route, extra) {
+    const b = yearBounds(route);
+    let s = 'ano=' + encodeURIComponent(b.ano) + '&desde=' + encodeURIComponent(b.desde) + '&hasta=' + encodeURIComponent(b.hasta);
+    if (extra) s += extra;
+    return s;
+  }
+  function balAmount(R, code) {
+    const bags = [R.balance.activo.anc, R.balance.activo.ex, R.balance.activo.deud, R.balance.activo.tes, R.balance.pasivo.pn, R.balance.pasivo.pnc, R.balance.pasivo.pc];
+    for (const bag of bags) {
+      const hit = bag.lines.find(l => l.code === code);
+      if (hit) return hit.amount;
+    }
+    return 0;
+  }
+  function balTable(title, bag, q) {
+    if (!bag || !bag.lines.length) return '';
+    return '<h3 style="margin:14px 0 6px">' + title + '</h3><div class="table-wrap"><table><thead><tr><th>Cuenta</th><th class="r">Importe</th></tr></thead><tbody>'
+      + bag.lines.map(l => '<tr><td>' + (l.code && l.code !== 'PyG' ? '<a href="#/mayor?cuenta=' + encodeURIComponent(l.code) + '&' + q + '">' + esc(l.code) + '</a> ' : '') + esc(l.name) + '</td><td class="r">' + money(l.amount) + '</td></tr>').join('')
+      + '<tr><td><b>Total</b></td><td class="r"><b>' + money(bag.total) + '</b></td></tr></tbody></table></div>';
+  }
+  function pager(route, path, page, pages, extra) {
+    if (pages <= 1) return '';
+    const b = yearBounds(route);
+    const q = route.q.q ? '&q=' + encodeURIComponent(route.q.q) : '';
+    const href = p => '#/' + path + '?ano=' + b.ano + '&desde=' + b.desde + '&hasta=' + b.hasta + q + (extra || '') + '&pag=' + p;
+    return '<div class="pager"><a class="btn ghost sm" href="' + href(Math.max(1, page - 1)) + '">Anterior</a><span class="muted">' + page + ' / ' + pages + '</span><a class="btn ghost sm" href="' + href(Math.min(pages, page + 1)) + '">Siguiente</a></div>';
+  }
+
+  VIEWS.conta = route => {
+    const b = yearBounds(route);
+    const R = PC.report(S, b.desde, b.hasta);
+    const mes = Number(b.hasta.slice(5, 7)) || 10;
+    const ig = PC.igic(S, PC.quarterRange(b.ano, Math.ceil(mes / 3)).from, PC.quarterRange(b.ano, Math.ceil(mes / 3)).to);
+    const ql = PC.quarterRange(b.ano, Math.ceil(mes / 3)).label;
+    return contaHead('conta', 'Contabilidad', 'Módulo completo de demo para una pyme canaria (Epik, IGIC). Partida doble sobre el PGC pyme. No son libros oficiales.')
+      + periodBar(route, 'conta')
+      + '<div class="kpis k4"><div class="card kpi"><div class="lbl">Resultado del periodo</div><div class="val">' + money(R.pyg.resultado) + '</div></div>'
+      + '<div class="card kpi"><div class="lbl">Clientes</div><div class="val">' + money(balAmount(R, '430')) + '</div><div class="hint">Saldo 430 a ' + PL.fd(b.hasta) + '</div></div>'
+      + '<div class="card kpi"><div class="lbl">Bancos</div><div class="val">' + money(balAmount(R, '572')) + '</div><div class="hint">Saldo 572</div></div>'
+      + '<div class="card kpi"><div class="lbl">IGIC ' + esc(ql) + '</div><div class="val">' + money(ig.cuota) + '</div><div class="hint">Orientativo · por validar con asesor</div></div></div>'
+      + '<div class="cards" style="margin-top:14px">' + CONTA_MENU.map(([id, t, d]) => '<a class="card" href="#/' + id + '?' + periodQuery(route) + '"><b>' + t + '</b><span class="muted small">' + d + '</span></a>').join('') + '</div>'
+      + (R.sumas.cuadra && R.balance.cuadra ? '<p class="hint">En este periodo las sumas cuadran y el balance de situación cuadra.</p>' : '<div class="badbox">Revisa el periodo: las sumas o el balance no cuadran.</div>');
+  };
+
+  VIEWS.plan = () => {
+    const rows = PC.allAccounts(S);
+    setBook('plan-cuentas', 'Plan de cuentas', ['Código', 'Nombre', 'Grupo', 'Activa'], rows.map(a => [a.code, a.name, a.group, a.active === false ? 'no' : 'sí']), 4);
+    return contaHead('plan', 'Plan de cuentas', 'PGC de pymes con subcuentas de IGIC (Canarias). Puedes renombrar, dar de alta y desactivar.', bookBtns())
+      + '<div class="table-wrap"><table><thead><tr><th>Código</th><th>Nombre</th><th></th></tr></thead><tbody>'
+      + rows.map(a => '<tr><td><b>' + esc(a.code) + '</b></td><td><form data-form="renCuenta" class="row"><input type="hidden" name="code" value="' + esc(a.code) + '"><input name="name" value="' + esc(a.name) + '" aria-label="Nombre ' + esc(a.code) + '"><button class="btn sec sm" type="submit">Guardar</button></form></td><td>'
+      + (a.active === false
+        ? '<button class="btn ghost sm" type="button" data-act="cuentaActiva" data-code="' + esc(a.code) + '" data-on="1">Activar</button>'
+        : '<button class="btn ghost sm" type="button" data-act="cuentaActiva" data-code="' + esc(a.code) + '" data-on="0">Desactivar</button>')
+      + '</td></tr>').join('')
+      + '</tbody></table></div>'
+      + '<form class="card" data-form="nuevaCuenta"><h3>Nueva cuenta</h3><div class="filters"><div><label class="f">Código</label><input name="code" placeholder="6291" inputmode="numeric"></div><div><label class="f">Nombre</label><input name="name" placeholder="Otros servicios · mensajería"></div><div><label class="f">Alta</label><button class="btn">Añadir al plan</button></div></div>'
+      + '<p class="hint">Grupo 1 a 7, mínimo 3 dígitos. 472 y 477 son IGIC soportado y repercutido. 4700 y 4750 son la Hacienda deudora y acreedora por IGIC.</p></form>';
+  };
+
+  VIEWS.diario = route => {
+    const b = yearBounds(route);
+    const R = PC.report(S, b.desde, b.hasta);
+    const q = (route.q.q || '').trim().toLowerCase();
+    const filtered = R.entries.filter(e => {
+      if (!q) return true;
+      if (e.concept.toLowerCase().indexOf(q) >= 0) return true;
+      if (srcLabel(e.source).toLowerCase().indexOf(q) >= 0) return true;
+      if (String(e.n) === q) return true;
+      return e.lines.some(l => l.code.indexOf(q) === 0 || PC.accName(S, l.code).toLowerCase().indexOf(q) >= 0);
+    });
+    const flat = [];
+    for (const e of filtered) {
+      e.lines.forEach((ln, i) => flat.push([
+        i ? '' : PL.fd(e.date),
+        i ? '' : String(e.n),
+        i ? '' : e.concept,
+        ln.code + ' ' + PC.accName(S, ln.code),
+        ln.debe ? PL.eurPlain(ln.debe) : '',
+        ln.haber ? PL.eurPlain(ln.haber) : '',
+        i ? '' : srcLabel(e.source)
+      ]));
+    }
+    setBook('diario-' + b.ano, 'Libro diario ' + PL.fd(b.desde) + ' a ' + PL.fd(b.hasta), ['Fecha', 'Asiento', 'Concepto', 'Cuenta', 'Debe', 'Haber', 'Origen'], flat, 4);
+    const per = 12;
+    const pages = Math.max(1, Math.ceil(filtered.length / per));
+    const page = Math.min(pages, Math.max(1, Number(route.q.pag) || 1));
+    const slice = filtered.slice((page - 1) * per, page * per);
+    if (!DRAFT.ast) DRAFT.ast = { date: todayISO(), concept: '', lines: [{ code: '629', debe: '', haber: '' }, { code: '572', debe: '', haber: '' }] };
+    const D = DRAFT.ast;
+    let debe = 0, haber = 0;
+    D.lines.forEach(ln => { debe += PL.parseEur(ln.debe) || 0; haber += PL.parseEur(ln.haber) || 0; });
+    const astEstado = !debe && !haber ? 'Sin importes' : ((debe === haber ? 'Cuadra · ' : 'No cuadra · ') + money(debe) + ' / ' + money(haber));
+    const body = slice.map(e => {
+      const link = e.source === 'auto-factura' ? ' <a href="#/factura/' + esc(e.ref) + '">ver</a>'
+        : (e.source === 'auto-albaran' ? ' <a href="#/albaran/' + esc(e.ref) + '">ver</a>' : '');
+      const del = (e.source === 'manual' || e.source === 'amort' || e.source === 'cuadre')
+        ? ' <button class="btn ghost sm" type="button" data-act="delAsiento" data-id="' + esc(e.id) + '">Eliminar</button>' : '';
+      const headRow = '<tr><td>' + PL.fd(e.date) + '</td><td>' + e.n + '</td><td>' + esc(e.concept) + link + '</td><td>' + esc(e.lines[0].code) + ' ' + esc(PC.accName(S, e.lines[0].code)) + '</td><td class="r">' + (e.lines[0].debe ? money(e.lines[0].debe) : '') + '</td><td class="r">' + (e.lines[0].haber ? money(e.lines[0].haber) : '') + '</td><td><span class="chip mut">' + esc(srcLabel(e.source)) + '</span>' + del + '</td></tr>';
+      return headRow + e.lines.slice(1).map(ln => '<tr><td></td><td></td><td></td><td>' + esc(ln.code) + ' ' + esc(PC.accName(S, ln.code)) + '</td><td class="r">' + (ln.debe ? money(ln.debe) : '') + '</td><td class="r">' + (ln.haber ? money(ln.haber) : '') + '</td><td></td></tr>').join('');
+    }).join('');
+    return contaHead('diario', 'Diario', 'Los asientos de factura, cobro, compra, pago, albarán y stock se recalculan solos. El manual, la amortización y el cuadre se guardan en este navegador.', bookBtns())
+      + periodBar(route, 'diario')
+      + '<form class="card" data-form="buscaDiario" data-path="diario"><div class="row"><input name="q" value="' + esc(route.q.q || '') + '" placeholder="Buscar concepto, cuenta o número" aria-label="Buscar en el diario"><button class="btn sec">Buscar</button></div></form>'
+      + '<div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>Fecha</th><th>Nº</th><th>Concepto</th><th>Cuenta</th><th class="r">Debe</th><th class="r">Haber</th><th>Origen</th></tr></thead><tbody>'
+      + (body || '<tr><td colspan="7">No hay asientos en el periodo.</td></tr>') + '</tbody></table></div>'
+      + pager(route, 'diario', page, pages)
+      + '<p class="hint">' + filtered.length + ' asientos. Se muestran ' + per + ' por página. El CSV y el PDF llevan el diario filtrado entero.</p>'
+      + '<form class="card" data-form="asiento"><h3>Asiento manual</h3><div class="two"><div><label class="f">Fecha</label><input type="date" data-ast="date" value="' + esc(D.date) + '"></div><div><label class="f">Concepto</label><input data-ast="concept" value="' + esc(D.concept) + '" placeholder="Alquiler de octubre"></div></div>'
+      + D.lines.map((ln, i) => '<div class="ast"><select data-ast="code:' + i + '" aria-label="Cuenta">' + accOpts(ln.code) + '</select><input data-ast="debe:' + i + '" value="' + esc(ln.debe) + '" placeholder="Debe" inputmode="decimal" aria-label="Debe"><input data-ast="haber:' + i + '" value="' + esc(ln.haber) + '" placeholder="Haber" inputmode="decimal" aria-label="Haber"><button class="x" type="button" data-act="delAst" data-i="' + i + '" aria-label="Quitar línea">×</button></div>').join('')
+      + '<div class="row" style="margin-top:8px"><button class="btn ghost" type="button" data-act="addAst">Añadir línea</button><span id="ast-bal" class="muted">' + astEstado + '</span><button class="btn">Guardar asiento</button></div>'
+      + '<p class="hint">Tiene que cuadrar al céntimo. No se guarda en un ejercicio cerrado.</p></form>';
+  };
+
+  VIEWS.mayor = route => {
+    const b = yearBounds(route);
+    const code = route.q.cuenta || '430';
+    const M = PC.mayor(S, code, b.desde, b.hasta);
+    setBook('mayor-' + code, 'Mayor ' + code + ' ' + M.name, ['Fecha', 'Asiento', 'Concepto', 'Debe', 'Haber', 'Saldo'],
+      [['', '', 'Saldo anterior', '', '', PL.eurPlain(M.anterior)]].concat(M.rows.map(r => [PL.fd(r.date), r.n, r.concept, r.debe ? PL.eurPlain(r.debe) : '', r.haber ? PL.eurPlain(r.haber) : '', PL.eurPlain(r.saldo)])), 3);
+    return contaHead('mayor', 'Mayor', M.code + ' · ' + M.name, bookBtns())
+      + periodBar(route, 'mayor')
+      + '<form class="card" data-form="eligeCuenta"><label class="f">Cuenta</label><div class="row"><select name="cuenta">' + accOpts(code) + '</select><button class="btn sec">Ver mayor</button></div></form>'
+      + '<div class="kpis"><div class="card kpi"><div class="lbl">Saldo anterior</div><div class="val">' + money(M.anterior) + '</div></div><div class="card kpi"><div class="lbl">Saldo final</div><div class="val">' + money(M.saldo) + '</div></div><div class="card kpi"><div class="lbl">Apuntes</div><div class="val">' + M.rows.length + '</div></div></div>'
+      + '<div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>Fecha</th><th>Nº</th><th>Concepto</th><th class="r">Debe</th><th class="r">Haber</th><th class="r">Saldo</th></tr></thead><tbody>'
+      + '<tr><td colspan="3">Saldo anterior</td><td></td><td></td><td class="r">' + money(M.anterior) + '</td></tr>'
+      + (M.rows.map(r => '<tr><td>' + PL.fd(r.date) + '</td><td>' + r.n + '</td><td>' + esc(r.concept) + '</td><td class="r">' + (r.debe ? money(r.debe) : '') + '</td><td class="r">' + (r.haber ? money(r.haber) : '') + '</td><td class="r">' + money(r.saldo) + '</td></tr>').join('') || '<tr><td colspan="6">Sin movimientos en el periodo.</td></tr>')
+      + '</tbody></table></div>';
+  };
+
+  VIEWS.sumas = route => {
+    const b = yearBounds(route);
+    const R = PC.report(S, b.desde, b.hasta);
+    const q = periodQuery(route);
+    setBook('sumas-saldos-' + b.ano, 'Sumas y saldos ' + PL.fd(b.desde) + ' a ' + PL.fd(b.hasta),
+      ['Cuenta', 'Nombre', 'Debe', 'Haber', 'Saldo deudor', 'Saldo acreedor'],
+      R.sumas.list.map(a => [a.code, a.name, PL.eurPlain(a.debe), PL.eurPlain(a.haber), PL.eurPlain(a.saldoDebe), PL.eurPlain(a.saldoHaber)])
+        .concat([['', 'Sumas', PL.eurPlain(R.sumas.debe), PL.eurPlain(R.sumas.haber), PL.eurPlain(R.sumas.saldoDebe), PL.eurPlain(R.sumas.saldoHaber)]]), 2);
+    return contaHead('sumas', 'Sumas y saldos', 'Movimientos del ' + PL.fd(b.desde) + ' al ' + PL.fd(b.hasta) + '. El cierre y la regularización no entran aquí: se ven en el diario.', bookBtns())
+      + periodBar(route, 'sumas')
+      + (R.sumas.cuadra ? '<div class="okbox">Sumas del debe y del haber iguales: ' + money(R.sumas.debe) + '. Saldos también cuadran.</div>' : '<div class="badbox">Las sumas no cuadran.</div>')
+      + '<div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Cuenta</th><th class="r">Debe</th><th class="r">Haber</th><th class="r">Saldo deudor</th><th class="r">Saldo acreedor</th></tr></thead><tbody>'
+      + R.sumas.list.map(a => '<tr><td><a href="#/mayor?cuenta=' + encodeURIComponent(a.code) + '&' + q + '">' + esc(a.code) + '</a> ' + esc(a.name) + '</td><td class="r">' + money(a.debe) + '</td><td class="r">' + money(a.haber) + '</td><td class="r">' + money(a.saldoDebe) + '</td><td class="r">' + money(a.saldoHaber) + '</td></tr>').join('')
+      + '<tr><td><b>Totales</b></td><td class="r"><b>' + money(R.sumas.debe) + '</b></td><td class="r"><b>' + money(R.sumas.haber) + '</b></td><td class="r"><b>' + money(R.sumas.saldoDebe) + '</b></td><td class="r"><b>' + money(R.sumas.saldoHaber) + '</b></td></tr></tbody></table></div>';
+  };
+
+  VIEWS.balance = route => {
+    const b = yearBounds(route);
+    const R = PC.report(S, b.desde, b.hasta);
+    const q = periodQuery(route);
+    const A = R.balance.activo, P = R.balance.pasivo;
+    const rows = [];
+    const push = (sec, bag) => bag.lines.forEach(l => rows.push([sec, (l.code ? l.code + ' ' : '') + l.name, PL.eurPlain(l.amount)]));
+    push('Activo no corriente', A.anc); push('Existencias', A.ex); push('Deudores', A.deud); push('Tesorería', A.tes);
+    push('Patrimonio neto', P.pn); push('Pasivo no corriente', P.pnc); push('Pasivo corriente', P.pc);
+    rows.push(['', 'Total activo', PL.eurPlain(A.total)]);
+    rows.push(['', 'Total patrimonio y pasivo', PL.eurPlain(P.total)]);
+    setBook('balance-' + b.hasta, 'Balance de situación a ' + PL.fd(b.hasta), ['Sección', 'Cuenta', 'Importe'], rows, 2);
+    return contaHead('balance', 'Balance de situación', 'Saldos a ' + PL.fd(b.hasta) + '. El resultado del periodo entra en el patrimonio para que el balance cuadre antes del cierre.', bookBtns())
+      + periodBar(route, 'balance')
+      + (R.balance.cuadra ? '<div class="okbox">Activo ' + money(A.total) + ' = patrimonio y pasivo ' + money(P.total) + '.</div>' : '<div class="badbox">El balance no cuadra.</div>')
+      + '<div class="two" style="margin-top:12px"><div class="card"><h2>Activo</h2>' + balTable('Activo no corriente', A.anc, q) + balTable('Existencias', A.ex, q) + balTable('Deudores', A.deud, q) + balTable('Tesorería', A.tes, q) + '<p class="bigmoney">' + money(A.total) + '</p></div>'
+      + '<div class="card"><h2>Patrimonio neto y pasivo</h2>' + balTable('Patrimonio neto', P.pn, q) + balTable('Pasivo no corriente', P.pnc, q) + balTable('Pasivo corriente', P.pc, q) + '<p class="bigmoney">' + money(P.total) + '</p></div></div>';
+  };
+
+  VIEWS.pyg = route => {
+    const b = yearBounds(route);
+    const R = PC.report(S, b.desde, b.hasta);
+    const q = periodQuery(route);
+    const rows = [['Ingresos', '', '']].concat(R.pyg.ingresos.map(a => [a.code, a.name, PL.eurPlain(a.amount)]), [['', 'Total ingresos', PL.eurPlain(R.pyg.totalIng)]], [['Gastos', '', '']], R.pyg.gastos.map(a => [a.code, a.name, PL.eurPlain(a.amount)]), [['', 'Total gastos', PL.eurPlain(R.pyg.totalGas)]], [['', 'Resultado', PL.eurPlain(R.pyg.resultado)]]);
+    setBook('pyg-' + b.ano, 'Cuenta de pérdidas y ganancias ' + PL.fd(b.desde) + ' a ' + PL.fd(b.hasta), ['Cuenta', 'Nombre', 'Importe'], rows, 2);
+    const lineRow = a => '<tr><td><a href="#/mayor?cuenta=' + encodeURIComponent(a.code) + '&' + q + '">' + esc(a.code) + '</a> ' + esc(a.name) + '</td><td class="r">' + money(a.amount) + '</td></tr>';
+    return contaHead('pyg', 'Pérdidas y ganancias', 'Del ' + PL.fd(b.desde) + ' al ' + PL.fd(b.hasta) + '. Una variación de existencias negativa es aumento de stock y mejora el resultado.', bookBtns())
+      + periodBar(route, 'pyg')
+      + '<div class="kpis"><div class="card kpi"><div class="lbl">Ingresos</div><div class="val">' + money(R.pyg.totalIng) + '</div></div><div class="card kpi"><div class="lbl">Gastos</div><div class="val">' + money(R.pyg.totalGas) + '</div></div><div class="card kpi"><div class="lbl">Resultado</div><div class="val">' + money(R.pyg.resultado) + '</div></div></div>'
+      + '<div class="two" style="margin-top:14px"><div class="card"><h3>Ingresos</h3><div class="table-wrap" style="margin-top:8px"><table><tbody>' + (R.pyg.ingresos.map(lineRow).join('') || '<tr><td>Sin ingresos</td><td></td></tr>') + '<tr><td><b>Total</b></td><td class="r"><b>' + money(R.pyg.totalIng) + '</b></td></tr></tbody></table></div></div>'
+      + '<div class="card"><h3>Gastos</h3><div class="table-wrap" style="margin-top:8px"><table><tbody>' + (R.pyg.gastos.map(lineRow).join('') || '<tr><td>Sin gastos</td><td></td></tr>') + '<tr><td><b>Total</b></td><td class="r"><b>' + money(R.pyg.totalGas) + '</b></td></tr></tbody></table></div></div></div>';
+  };
+
+  VIEWS.tesoreria = route => {
+    const b = yearBounds(route);
+    const R = PC.report(S, b.desde, b.hasta);
+    const C = R.cash;
+    setBook('flujo-caja-' + b.ano, 'Flujo de caja ' + PL.fd(b.desde) + ' a ' + PL.fd(b.hasta),
+      ['Fecha', 'Concepto', 'Cuenta', 'Contrapartida', 'Entrada', 'Salida'],
+      C.rows.map(r => [PL.fd(r.date), r.concept, r.code, r.contra, r.entra ? PL.eurPlain(r.entra) : '', r.sale ? PL.eurPlain(r.sale) : '']), 4);
+    const bankRows = (S.bank || []).filter(x => x.date >= b.desde && x.date <= b.hasta);
+    const extIn = bankRows.filter(x => x.amount > 0).reduce((s, x) => s + x.amount, 0);
+    const extOut = bankRows.filter(x => x.amount < 0).reduce((s, x) => s + -x.amount, 0);
+    return contaHead('tesoreria', 'Flujo de caja', 'Tesorería según el mayor de las cuentas 570 y 572. El extracto incluye movimientos aún no casados.', bookBtns())
+      + periodBar(route, 'tesoreria')
+      + '<div class="kpis k4"><div class="card kpi"><div class="lbl">Saldo inicial</div><div class="val">' + money(C.inicial) + '</div></div>'
+      + '<div class="card kpi"><div class="lbl">Entradas</div><div class="val">' + money(C.entradas) + '</div><div class="hint">Cobros de clientes ' + money(C.tipo.cobros) + '</div></div>'
+      + '<div class="card kpi"><div class="lbl">Salidas</div><div class="val">' + money(C.salidas) + '</div><div class="hint">Pagos a proveedores ' + money(C.tipo.pagos) + '</div></div>'
+      + '<div class="card kpi"><div class="lbl">Saldo final</div><div class="val">' + money(C.final) + '</div></div></div>'
+      + '<div class="card"><p>Extracto del periodo (cuenta operativa de banco, casada o no): entradas ' + money(extIn) + ' · salidas ' + money(extOut) + ' · neto ' + money(extIn - extOut) + '.</p>'
+      + '<p class="hint">La diferencia con el mayor son partidas sin casar o asientos manuales a banco. Se revisan en Conciliación. Un cobro solo pasa al mayor cuando el importe cuadra.</p></div>'
+      + '<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Concepto</th><th>Cuenta</th><th>Contra</th><th class="r">Entrada</th><th class="r">Salida</th></tr></thead><tbody>'
+      + (C.rows.map(r => '<tr><td>' + PL.fd(r.date) + '</td><td>' + esc(r.concept) + '</td><td>' + esc(r.code) + '</td><td>' + esc(r.contra) + '</td><td class="r">' + (r.entra ? money(r.entra) : '') + '</td><td class="r">' + (r.sale ? money(r.sale) : '') + '</td></tr>').join('') || '<tr><td colspan="6">Sin movimientos de tesorería en el periodo.</td></tr>')
+      + '</tbody></table></div>';
+  };
+
+  VIEWS.igic = route => {
+    const ano = (route.q.ano || defaultYear()).replace(/[^\d]/g, '').slice(0, 4) || defaultYear();
+    const t = String(route.q.t || '4');
+    const range = t === '0' ? { from: ano + '-01-01', to: ano + '-12-31', label: 'Ejercicio ' + ano, q: 0 } : PC.quarterRange(ano, t);
+    const G = PC.igic(S, range.from, range.to);
+    const rows = [['Expedida', '', '', '', '', '', '', '', '']].concat(G.expedidas.map(r => ['Expedida', PL.fd(r.date), r.num, r.name, r.nif, PL.eurPlain(r.b0), PL.eurPlain(r.b7), PL.eurPlain(r.cuota), PL.eurPlain(r.total)]))
+      .concat([['Recibida', '', '', '', '', '', '', '', '']], G.recibidas.map(r => ['Recibida', PL.fd(r.date), r.num, r.name, r.nif, PL.eurPlain(r.b0), PL.eurPlain(r.b7), PL.eurPlain(r.cuota), PL.eurPlain(r.total)]),
+        [['', '', '', 'Cuota repercutida', '', '', '', PL.eurPlain(G.rep), ''], ['', '', '', 'Cuota soportada', '', '', '', PL.eurPlain(G.sop), ''], ['', '', '', 'Resultado', '', '', '', PL.eurPlain(G.cuota), '']]);
+    setBook('libro-igic-' + range.label.replace(/\s/g, ''), 'Libro de IGIC ' + range.label, ['Libro', 'Fecha', 'Número', 'Tercero', 'NIF', 'Base 0%', 'Base 7%', 'Cuota', 'Total'], rows, 5);
+    const opt = ['1', '2', '3', '4', '0'].map(n => '<option value="' + n + '"' + (t === n ? ' selected' : '') + '>' + (n === '0' ? 'Año completo' : n + 'T') + '</option>').join('');
+    const libro = (title, list) => '<div class="card"><h3>' + title + '</h3><div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Fecha</th><th>Número</th><th>Tercero</th><th>NIF</th><th class="r">Base 0 %</th><th class="r">Base 7 %</th><th class="r">Cuota</th><th class="r">Total</th></tr></thead><tbody>'
+      + (list.map(r => '<tr><td>' + PL.fd(r.date) + '</td><td>' + esc(r.num) + '</td><td>' + esc(r.name) + '</td><td>' + esc(r.nif) + '</td><td class="r">' + money(r.b0) + '</td><td class="r">' + money(r.b7) + '</td><td class="r">' + money(r.cuota) + '</td><td class="r">' + money(r.total) + '</td></tr>').join('') || '<tr><td colspan="8">Sin facturas en el periodo.</td></tr>')
+      + '</tbody></table></div></div>';
+    return contaHead('igic', 'Libro de IGIC', 'Liquidación orientativa del modelo 420 (régimen general, IGIC).', bookBtns())
+      + '<div class="warnbox">' + esc(G.aviso) + ' El resumen anual equivalente sería el modelo 415 y tampoco se presenta desde este piloto.</div>'
+      + '<form class="card" data-form="igicPeriod"><div class="filters"><div><label class="f">Ejercicio</label><input name="ano" value="' + esc(ano) + '" inputmode="numeric"></div><div><label class="f">Periodo</label><select name="t">' + opt + '</select></div><div><label class="f">Ver</label><button class="btn">Calcular</button></div></div></form>'
+      + '<div class="kpis k4"><div class="card kpi"><div class="lbl">IGIC repercutido</div><div class="val">' + money(G.rep) + '</div></div><div class="card kpi"><div class="lbl">IGIC soportado</div><div class="val">' + money(G.sop) + '</div></div>'
+      + '<div class="card kpi"><div class="lbl">' + (G.cuota >= 0 ? 'A ingresar' : 'A compensar') + '</div><div class="val">' + money(G.cuota >= 0 ? G.aIngresar : G.aCompensar) + '</div></div>'
+      + '<div class="card kpi"><div class="lbl">Resultado ' + esc(range.label) + '</div><div class="val">' + money(G.cuota) + '</div><div class="hint">Repercutido menos soportado</div></div></div>'
+      + '<div class="card"><h3>Desglose por tipo</h3><div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Tipo</th><th class="r">Base ventas</th><th class="r">Cuota repercutida</th><th class="r">Base compras</th><th class="r">Cuota soportada</th></tr></thead><tbody>'
+      + (function () {
+        const rates = new Set(G.tasasE.map(x => x.rate).concat(G.tasasR.map(x => x.rate)));
+        const list = [...rates].sort((a, c) => a - c);
+        if (!list.length) return '<tr><td colspan="5">Sin bases en el periodo.</td></tr>';
+        return list.map(rate => {
+          const e = G.tasasE.find(x => x.rate === rate) || { base: 0, cuota: 0 };
+          const r = G.tasasR.find(x => x.rate === rate) || { base: 0, cuota: 0 };
+          const name = rate === 0 ? 'Tipo cero 0 % (fruta y verdura)' : (rate === 7 ? 'Tipo general 7 %' : ('Tipo ' + rate + ' %'));
+          return '<tr><td>' + name + '</td><td class="r">' + money(e.base) + '</td><td class="r">' + money(e.cuota) + '</td><td class="r">' + money(r.base) + '</td><td class="r">' + money(r.cuota) + '</td></tr>';
+        }).join('');
+      })()
+      + '</tbody></table></div><p class="hint">Casillas orientativas del 420: base y cuota devengadas, IGIC deducible y resultado. Por validar con asesor antes de cualquier presentación.</p></div>'
+      + libro('Facturas expedidas', G.expedidas) + libro('Facturas recibidas', G.recibidas);
+  };
+
+  VIEWS.amort = route => {
+    PC.ensure(S);
+    const ano = (route.q.ano || defaultYear()).replace(/[^\d]/g, '').slice(0, 4) || defaultYear();
+    const rows = S.activos.map(a => {
+      const q = PC.cuota(S, a, ano);
+      const hecho = (S.asientos || []).some(x => x.source === 'amort' && x.ref === a.id && String(x.date).slice(0, 4) === ano);
+      return { a, q, hecho };
+    });
+    setBook('amortizaciones-' + ano, 'Cuadro de amortización ' + ano, ['Bien', 'Alta', 'Valor', 'Residual', 'Años', 'Cuenta', 'Cuota ' + ano, 'Estado'],
+      rows.map(r => [r.a.name, PL.fd(r.a.fecha), PL.eurPlain(r.a.valor), PL.eurPlain(r.a.residual || 0), r.a.anos, r.a.cuenta + ' / ' + r.a.acum + ' / ' + r.a.gasto, PL.eurPlain(r.q), r.hecho ? 'contabilizada' : 'pendiente']), 6);
+    return contaHead('amort', 'Amortizaciones', 'Método lineal. El año de alta se prorratea por meses, incluido el mes de compra.', bookBtns())
+      + '<form class="card" data-form="amortAno"><div class="row"><label class="f">Ejercicio</label><input name="ano" value="' + esc(ano) + '" style="max-width:120px" inputmode="numeric"><button class="btn sec">Ver cuotas</button></div></form>'
+      + '<div class="table-wrap"><table><thead><tr><th>Bien</th><th>Alta</th><th class="r">Valor</th><th class="r">Vida</th><th class="r">Cuota ' + esc(ano) + '</th><th>Cuentas</th><th></th></tr></thead><tbody>'
+      + (rows.map(r => '<tr><td>' + esc(r.a.name) + '</td><td>' + PL.fd(r.a.fecha) + '</td><td class="r">' + money(r.a.valor) + '</td><td class="r">' + r.a.anos + ' años</td><td class="r">' + money(r.q) + '</td><td class="small">' + esc(r.a.gasto) + ' / ' + esc(r.a.acum) + '</td><td>'
+        + (r.hecho ? '<span class="chip cobrada">Contabilizada</span>' : '<button class="btn sm" type="button" data-act="postAmort" data-id="' + esc(r.a.id) + '" data-ano="' + esc(ano) + '">Asiento</button>')
+        + ' <button class="btn ghost sm" type="button" data-act="delActivo" data-id="' + esc(r.a.id) + '">Quitar</button></td></tr>').join('') || '<tr><td colspan="7">No hay bienes.</td></tr>')
+      + '</tbody></table></div>'
+      + '<form class="card" data-form="nuevoActivo"><h3>Nuevo bien</h3><div class="filters"><div><label class="f">Descripción</label><input name="name" placeholder="Furgoneta reparto"></div><div><label class="f">Fecha de alta</label><input type="date" name="fecha" value="' + todayISO() + '"></div><div><label class="f">Valor €</label><input name="valor" placeholder="18000,00" inputmode="decimal"></div><div><label class="f">Años</label><input name="anos" value="6" inputmode="numeric"></div></div>'
+      + '<div class="filters" style="margin-top:8px"><div><label class="f">Residual €</label><input name="residual" value="0"></div><div><label class="f">Cuenta inmovilizado</label><select name="cuenta">' + accOpts('218') + '</select></div><div><label class="f">Amortización acumulada</label><select name="acum">' + accOpts('281') + '</select></div><div><label class="f">Gasto</label><select name="gasto">' + accOpts('681') + '</select></div></div>'
+      + '<button class="btn" style="margin-top:10px">Añadir a la tabla</button></form>';
+  };
+
+  VIEWS.concilia = route => {
+    const b = yearBounds(route);
+    const R = PC.report(S, '2000-01-01', b.hasta);
+    const sug = PC.sugerencias(S).filter(s => s.bank.date >= b.desde && s.bank.date <= b.hasta);
+    const libro = R.cash.final;
+    const extracto = (S.bank || []).filter(x => x.date <= b.hasta).reduce((s, x) => s + x.amount, 0);
+    const rows = (S.bank || []).filter(x => x.date >= b.desde && x.date <= b.hasta).slice().sort((a, c) => a.date < c.date ? -1 : 1);
+    setBook('conciliacion-' + b.ano, 'Conciliación bancaria ' + PL.fd(b.desde) + ' a ' + PL.fd(b.hasta),
+      ['Fecha', 'Concepto', 'Importe', 'Estado'],
+      rows.map(x => {
+        const inv = x.invoiceId ? PL.byId(S.invoices, x.invoiceId) : null;
+        const rec = x.receivedId ? PL.byId(S.received, x.receivedId) : null;
+        return [PL.fd(x.date), x.concept, PL.eurPlain(x.amount), inv ? ('Cobro ' + inv.num) : (rec ? ('Pago ' + rec.num) : 'Sin casar')];
+      }), 2);
+    return contaHead('concilia', 'Conciliación bancaria', 'Regla Epik: una factura queda cobrada solo si el ingreso cuadra al céntimo con el total.', bookBtns())
+      + '<div class="warnbox">Cobrado solo si cuadra. Si el importe del banco no coincide, la factura sigue emitida. Lo mismo para el pago a proveedor.</div>'
+      + periodBar(route, 'concilia')
+      + '<div class="kpis"><div class="card kpi"><div class="lbl">Saldo mayor 570+572</div><div class="val">' + money(libro) + '</div><div class="hint">A ' + PL.fd(b.hasta) + '</div></div>'
+      + '<div class="card kpi"><div class="lbl">Saldo extracto</div><div class="val">' + money(extracto) + '</div><div class="hint">Suma de movimientos hasta esa fecha</div></div>'
+      + '<div class="card kpi"><div class="lbl">Diferencia</div><div class="val">' + money(extracto - libro) + '</div><div class="hint">Pendiente de casar o asiento manual</div></div></div>'
+      + '<div class="two"><form class="card" data-form="importExtracto"><h3>Importar CSV</h3><p class="hint">Columnas fecha;concepto;importe (o debe y haber). El importe negativo es un cargo. Importar no marca nada como cobrado.</p><input type="file" name="file" accept=".csv,text/csv" required><button class="btn" style="margin-top:8px">Cargar extracto</button> <button class="btn ghost" type="button" data-act="plantillaCsv">Plantilla</button></form>'
+      + '<div class="card"><h3>Casar importes exactos</h3><p class="hint">Solo empareja cuando hay una sola factura emitida (o una sola recibida) con el mismo importe en céntimos.</p><button class="btn" type="button" data-act="casarExactos">Casar los que cuadran</button></div></div>'
+      + '<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Concepto</th><th class="r">Importe</th><th>Casación</th></tr></thead><tbody>'
+      + (rows.map(x => {
+        const inv = x.invoiceId ? PL.byId(S.invoices, x.invoiceId) : null;
+        const rec = x.receivedId ? PL.byId(S.received, x.receivedId) : null;
+        const s = sug.find(g => g.bank.id === x.id);
+        let estado = '<span class="chip pend">Sin casar</span>';
+        if (inv) estado = '<a href="#/factura/' + inv.id + '">Cobro ' + esc(inv.num) + '</a>';
+        else if (rec) estado = 'Pago ' + esc(rec.num);
+        else if (s && s.cuadra) estado = '<span class="chip cobrada">Cuadra con ' + esc(s.docs[0].num) + '</span>';
+        else if (s && s.docs.length > 1) estado = '<span class="chip pend">' + s.docs.length + ' documentos con el mismo importe</span>';
+        else estado = '<span class="chip mut">No cuadra · no se cobra</span>';
+        return '<tr><td>' + PL.fd(x.date) + '</td><td>' + esc(x.concept) + '</td><td class="r">' + money(x.amount) + '</td><td>' + estado + '</td></tr>';
+      }).join('') || '<tr><td colspan="4">No hay movimientos en el periodo.</td></tr>')
+      + '</tbody></table></div>'
+      + '<p class="hint">También puedes casar a mano en Cobros y banco. Deshacer un cobro devuelve la factura a emitida y quita el asiento de cobro.</p>';
+  };
+
+  VIEWS.cierre = route => {
+    const ano = (route.q.ano || defaultYear()).replace(/[^\d]/g, '').slice(0, 4) || defaultYear();
+    const cerrado = PC.yearClosed(S, ano);
+    let prev = null, err = '';
+    try { prev = PC.previewCierre(S, ano); } catch (e) { err = e.message; }
+    const stale = cerrado && PC.cierreStale(S, ano);
+    const rows = prev ? [['Resultado', PL.eurPlain(prev.resultado)], ['Líneas de regularización', String(prev.regularizacion.length)], ['Líneas de cierre', String(prev.cierre.length)]] : [];
+    setBook('cierre-' + ano, 'Cierre de ejercicio ' + ano, ['Concepto', 'Importe'], rows, 1);
+    return contaHead('cierre', 'Cierre y apertura', 'Regulariza los grupos 6 y 7 contra la 129, cierra el balance a 31 de diciembre y abre el ejercicio siguiente.', bookBtns())
+      + '<form class="card" data-form="cierreAno"><div class="row"><label class="f">Ejercicio</label><input name="ano" value="' + esc(ano) + '" style="max-width:120px" inputmode="numeric"><button class="btn sec">Calcular</button></div></form>'
+      + (cerrado ? '<div class="okbox">El ejercicio ' + esc(ano) + ' está cerrado. En el diario de esa fecha están la regularización y el cierre. El 1 de enero siguiente está la apertura.</div>' : '<div class="warnbox">El ejercicio ' + esc(ano) + ' sigue abierto. El balance ya muestra el resultado, pero todavía no hay asiento de cierre.</div>')
+      + (stale ? '<div class="badbox">Hay movimientos nuevos después del cierre. Reabre el ejercicio y vuelve a cerrarlo para actualizar la regularización.</div>' : '')
+      + (err ? '<div class="badbox">' + esc(err) + '</div>' : '')
+      + (prev ? '<div class="kpis"><div class="card kpi"><div class="lbl">Resultado a regularizar</div><div class="val">' + money(prev.resultado) + '</div></div><div class="card kpi"><div class="lbl">Cuentas con saldo</div><div class="val">' + prev.movimientos + '</div></div><div class="card kpi"><div class="lbl">Asiento de cierre</div><div class="val">' + prev.cierre.length + '</div><div class="hint">líneas</div></div></div>' : '')
+      + '<div class="card"><div class="row">'
+      + (cerrado ? '<button class="btn bad" type="button" data-act="reabrir" data-ano="' + esc(ano) + '">Reabrir ejercicio</button>' : '<button class="btn" type="button" data-act="cerrarEj" data-ano="' + esc(ano) + '">Cerrar ejercicio ' + esc(ano) + '</button>')
+      + '<a class="btn ghost" href="#/diario?ano=' + esc(ano) + '&desde=' + esc(ano) + '-12-01&hasta=' + esc(ano) + '-12-31">Ver diario de diciembre</a></div>'
+      + '<p class="hint">Cerrar no borra facturas ni la cadena Verifactu. Solo añade los tres asientos. Reabrir los quita.</p></div>';
+  };
+
+  VIEWS.existencias = route => {
+    const b = yearBounds(route);
+    const R = PC.report(S, b.desde, b.hasta);
+    const I = R.inventario;
+    setBook('existencias-' + b.hasta, 'Inventario a ' + PL.fd(b.hasta), ['Producto', 'Teórico', 'Contado', 'Diferencia', 'Valor'],
+      I.rows.map(r => [r.p.name, PL.qtyText(r.left), r.counted == null ? '' : PL.qtyText(r.counted), r.diff == null ? '' : PL.qtyText(r.diff), PL.eurPlain(r.value)])
+        .concat([['', '', '', 'Valor stock', PL.eurPlain(I.valor)], ['300', 'Mercaderías', '', '', PL.eurPlain(I.saldo300)], ['610', 'Variación (haber menos debe)', '', '', PL.eurPlain(I.saldo610)]]), 4);
+    return contaHead('existencias', 'Inventario y variación', 'Cada entrada de lote carga la 300 con abono a la 610. Cada salida de albarán o factura con producto hace el asiento contrario, al coste del lote.', bookBtns())
+      + periodBar(route, 'existencias')
+      + (I.cuadra ? '<div class="okbox">El saldo de la cuenta 300 (' + money(I.saldo300) + ') coincide con el valor teórico del stock (' + money(I.valor) + ').</div>' : '<div class="warnbox">La 300 vale ' + money(I.saldo300) + ' y el stock teórico ' + money(I.valor) + '. Si generaste un ajuste de cuadre, la diferencia es ese asiento.</div>')
+      + '<div class="kpis"><div class="card kpi"><div class="lbl">Valor teórico</div><div class="val">' + money(I.valor) + '</div></div><div class="card kpi"><div class="lbl">Saldo 300</div><div class="val">' + money(I.saldo300) + '</div></div><div class="card kpi"><div class="lbl">Variación neta 610</div><div class="val">' + money(I.saldo610) + '</div><div class="hint">Haber menos debe. Positivo = aumento de existencias</div></div></div>'
+      + '<div class="table-wrap"><table><thead><tr><th>Producto</th><th class="r">Teórico</th><th class="r">Contado</th><th class="r">Diferencia</th><th class="r">Valor</th></tr></thead><tbody>'
+      + I.rows.map(r => '<tr><td>' + esc(r.p.name) + '</td><td class="r">' + PL.qtyText(r.left) + '</td><td class="r">' + (r.counted == null ? '—' : PL.qtyText(r.counted)) + '</td><td class="r">' + (r.diff == null ? '—' : PL.qtyText(r.diff)) + '</td><td class="r">' + money(r.value) + '</td></tr>').join('')
+      + '</tbody></table></div>'
+      + '<div class="card"><p>El conteo se edita en <a href="#/stock">Stock y cuadre</a>. El plátano de demo está 3 kg por debajo a propósito.</p><button class="btn" type="button" data-act="postCuadre" data-date="' + esc(b.hasta) + '">Asiento de la diferencia de cuadre</button>'
+      + '<p class="hint">Ese asiento ajusta la 300 y la 610 al coste del lote. Solo puede haber uno: si repites, elimina el anterior en el diario.</p></div>';
   };
 
   VIEWS.firmar = route => {
@@ -710,6 +1093,83 @@
       log(todayISO(), 'Documento firmado', doc.id, doc.n || 0);
       save(); toast('Firma guardada en este navegador');
       go((PL.byId(S.invoices, doc.id) ? '#/factura/' : '#/albaran/') + doc.id);
+    },
+    bookCsv() {
+      if (!BOOK) throw new Error('No hay libro para exportar');
+      downloadBlob(BOOK.file + '.csv', new Blob([csv([BOOK.headers].concat(BOOK.rows))], { type: 'text/csv;charset=utf-8' }), 'text/csv');
+    },
+    bookPdf() {
+      if (!BOOK) throw new Error('No hay libro para exportar');
+      const bytes = PaguuPdf.tablePdf({
+        title: BOOK.title,
+        subtitle: BOOK.subtitle || S.company.name,
+        headers: BOOK.headers,
+        rows: BOOK.rows,
+        numericFrom: BOOK.numericFrom,
+        note: 'Piloto PAGUU. Libro de demostración. No es un libro oficial. IGIC orientativo, por validar con asesor.'
+      });
+      downloadBlob(BOOK.file + '.pdf', bytes, 'application/pdf');
+    },
+    cuentaActiva(t) {
+      PC.setAccountActive(S, t.dataset.code, t.dataset.on === '1');
+      save(); toast(t.dataset.on === '1' ? 'Cuenta activada' : 'Cuenta desactivada'); render();
+    },
+    addAst() {
+      if (!DRAFT.ast) return;
+      DRAFT.ast.lines.push({ code: '572', debe: '', haber: '' });
+      render();
+    },
+    delAst(t) {
+      if (!DRAFT.ast) return;
+      DRAFT.ast.lines.splice(Number(t.dataset.i), 1);
+      if (DRAFT.ast.lines.length < 2) DRAFT.ast.lines.push({ code: '572', debe: '', haber: '' });
+      render();
+    },
+    delAsiento(t) {
+      if (!confirm('¿Eliminar este asiento?')) return;
+      PC.deleteAsiento(S, t.dataset.id);
+      save(); toast('Asiento eliminado'); render();
+    },
+    postAmort(t) {
+      PC.postAmort(S, t.dataset.id, t.dataset.ano);
+      save(); toast('Cuota contabilizada en el diario'); render();
+    },
+    delActivo(t) {
+      if (!confirm('¿Quitar este bien de la tabla?')) return;
+      PC.deleteAsset(S, t.dataset.id);
+      save(); toast('Bien eliminado'); render();
+    },
+    casarExactos() {
+      const r = PC.casarExactos(S);
+      save();
+      toast('Cobrados ' + r.cobros + ' · pagados ' + r.pagos + ' · sin casar ' + r.omitidos);
+      render();
+    },
+    plantillaCsv() {
+      const inv = S.invoices.find(i => i.status === 'emitida');
+      const rows = [['fecha', 'concepto', 'importe']];
+      if (inv) {
+        const tot = PL.totals(inv);
+        const [y, m, d] = inv.date.split('-');
+        rows.push([d + '/' + m + '/' + y, 'Cobro ' + inv.num, PL.eurPlain(tot.total)]);
+      }
+      rows.push([PL.fd(todayISO()).replace(/(\d+)\/(\d+)\/(\d+)/, '$1/$2/$3'), 'Ingreso que no cuadra', '1,23']);
+      downloadBlob('extracto-ejemplo.csv', new Blob([csv(rows)], { type: 'text/csv;charset=utf-8' }), 'text/csv');
+    },
+    cerrarEj(t) {
+      if (!confirm('¿Cerrar el ejercicio ' + t.dataset.ano + '? Se añaden regularización, cierre y apertura.')) return;
+      PC.closeYear(S, t.dataset.ano);
+      log(t.dataset.ano + '-12-31', 'Cierre de ejercicio ' + t.dataset.ano, '', 0);
+      save(); toast('Ejercicio cerrado'); render();
+    },
+    reabrir(t) {
+      if (!confirm('¿Reabrir ' + t.dataset.ano + ' y quitar los asientos de cierre?')) return;
+      PC.reopenYear(S, t.dataset.ano);
+      save(); toast('Ejercicio reabierto'); render();
+    },
+    postCuadre(t) {
+      PC.postCuadre(S, t.dataset.date || todayISO());
+      save(); toast('Asiento de cuadre guardado en el diario'); render();
     }
   };
 
@@ -843,8 +1303,92 @@
       const cost = PL.parseEur(f.cost.value);
       PL.addLot(S, { pid: f.pid.value, qtyMilli: qty, cost, lot: f.lot.value.trim(), origin: f.origin.value.trim(), date: f.date.value });
       save(); toast('Entrada registrada'); render();
+    },
+    periodo(f) {
+      let ano = String(f.ano.value || '').replace(/[^\d]/g, '').slice(0, 4);
+      let desde = f.desde.value;
+      let hasta = f.hasta.value;
+      if (ano && (!desde || desde.slice(0, 4) !== ano)) {
+        desde = ano + '-01-01';
+        hasta = ano + '-12-31';
+      }
+      const path = f.dataset.path || 'conta';
+      const q = new URLSearchParams();
+      if (ano) q.set('ano', ano);
+      if (desde) q.set('desde', desde);
+      if (hasta) q.set('hasta', hasta);
+      if (f.q && f.q.value) q.set('q', f.q.value);
+      if (f.cuenta && f.cuenta.value) q.set('cuenta', f.cuenta.value);
+      go('#/' + path + '?' + q.toString());
+    },
+    buscaDiario(f) {
+      const route = parse();
+      const b = yearBounds(route);
+      const q = new URLSearchParams({ ano: b.ano, desde: b.desde, hasta: b.hasta });
+      if (f.q.value.trim()) q.set('q', f.q.value.trim());
+      go('#/diario?' + q.toString());
+    },
+    eligeCuenta(f) {
+      const route = parse();
+      const b = yearBounds(route);
+      go('#/mayor?ano=' + b.ano + '&desde=' + b.desde + '&hasta=' + b.hasta + '&cuenta=' + encodeURIComponent(f.cuenta.value));
+    },
+    renCuenta(f) {
+      PC.upsertAccount(S, f.code.value, f.name.value);
+      save(); toast('Cuenta actualizada'); render();
+    },
+    nuevaCuenta(f) {
+      PC.addAccount(S, f.code.value, f.name.value);
+      save(); toast('Cuenta añadida al plan'); render();
+    },
+    asiento() {
+      const id = PC.addManual(S, DRAFT.ast);
+      DRAFT.ast = null;
+      log(todayISO(), 'Asiento manual', id, 0);
+      save(); toast('Asiento guardado en el diario'); render();
+    },
+    igicPeriod(f) {
+      go('#/igic?ano=' + encodeURIComponent(f.ano.value.trim()) + '&t=' + encodeURIComponent(f.t.value));
+    },
+    amortAno(f) { go('#/amort?ano=' + encodeURIComponent(f.ano.value.trim())); },
+    cierreAno(f) { go('#/cierre?ano=' + encodeURIComponent(f.ano.value.trim())); },
+    nuevoActivo(f) {
+      PC.addAsset(S, { name: f.name.value, fecha: f.fecha.value, valor: f.valor.value, residual: f.residual.value, anos: f.anos.value, cuenta: f.cuenta.value, acum: f.acum.value, gasto: f.gasto.value });
+      save(); toast('Bien añadido. La cuota se contabiliza con el botón Asiento.'); render();
+    },
+    importExtracto(f) {
+      const input = f.file;
+      const file = input.files && input.files[0];
+      if (!file) throw new Error('Elige un CSV');
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const r = PC.importExtracto(S, String(reader.result || ''));
+          save();
+          toast('Movimientos nuevos: ' + r.added + '. Repetidos: ' + r.dup + '.');
+          render();
+        } catch (err) { toast(err.message || 'CSV no válido', 'bad'); }
+      };
+      reader.readAsText(file);
     }
   };
+
+  function onAst(t) {
+    if (!DRAFT.ast) return;
+    const k = t.dataset.ast;
+    if (k === 'date') DRAFT.ast.date = t.value;
+    else if (k === 'concept') DRAFT.ast.concept = t.value;
+    else {
+      const parts = k.split(':');
+      const ln = DRAFT.ast.lines[Number(parts[1])];
+      if (ln) ln[parts[0]] = t.value;
+    }
+    const box = document.getElementById('ast-bal');
+    if (!box) return;
+    let debe = 0, haber = 0;
+    DRAFT.ast.lines.forEach(ln => { debe += PL.parseEur(ln.debe) || 0; haber += PL.parseEur(ln.haber) || 0; });
+    box.textContent = !debe && !haber ? 'Sin importes' : ((debe === haber ? 'Cuadra · ' : 'No cuadra · ') + money(debe) + ' / ' + money(haber));
+  }
 
   function onDraft(t) {
     const parts = (t.dataset.draft || '').split(':');
@@ -962,6 +1506,7 @@
   }
 
   function render() {
+    if (PC && PC.ensure(S)) save();
     const route = parse();
     document.getElementById('side').innerHTML = sidebar(route);
     const view = document.getElementById('view');
@@ -977,7 +1522,7 @@
       catch (e) { el.textContent = 'QR no disponible'; }
     });
     if (view.querySelector('#sigcv')) initSig(false);
-    const titles = { inicio: 'Inicio', facturas: 'Facturas', factura: 'Factura', nueva: 'Nueva factura', beneficios: 'Beneficios', relacion: 'Relación', verifactu: 'Verifactu', clientes: 'Clientes', cobros: 'Cobros' };
+    const titles = { inicio: 'Inicio', facturas: 'Facturas', factura: 'Factura', nueva: 'Nueva factura', beneficios: 'Beneficios', relacion: 'Relación', verifactu: 'Verifactu', clientes: 'Clientes', cobros: 'Cobros', conta: 'Contabilidad', plan: 'Plan de cuentas', diario: 'Diario', mayor: 'Mayor', sumas: 'Sumas y saldos', balance: 'Balance', pyg: 'Pérdidas y ganancias', tesoreria: 'Flujo de caja', igic: 'Libro de IGIC', amort: 'Amortizaciones', concilia: 'Conciliación', cierre: 'Cierre', existencias: 'Existencias' };
     document.title = 'PAGUU · ' + (titles[route.name] || 'facturación con IGIC');
   }
 
@@ -1003,11 +1548,13 @@
   document.body.addEventListener('input', e => {
     const t = e.target;
     if (t.dataset && t.dataset.draft) onDraft(t);
+    if (t.dataset && t.dataset.ast) onAst(t);
     if (t.dataset && t.dataset.actInput === 'factQ') { factQ = t.value; factPage = 1; const pos = t.selectionStart; render(); const n = document.getElementById('qfact'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }
   });
   document.body.addEventListener('change', e => {
     const t = e.target;
     if (t.dataset && t.dataset.draft) onDraft(t);
+    if (t.dataset && t.dataset.ast) onAst(t);
     if (t.dataset && t.dataset.actChange === 'importFile') importFile(t).catch(err => toast(err.message, 'bad'));
   });
   window.addEventListener('hashchange', render);
