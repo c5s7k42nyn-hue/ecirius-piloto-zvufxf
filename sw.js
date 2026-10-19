@@ -1,4 +1,4 @@
-const V = 'paguu-pilot-v1';
+const V = 'paguu-pilot-v2';
 const FILES = [
   './',
   'index.html',
@@ -6,6 +6,7 @@ const FILES = [
   'css/app.css',
   'js/app.js',
   'js/logic.js',
+  'js/conta.js',
   'js/pdf.js',
   'js/qrcode.js',
   'js/seed.js',

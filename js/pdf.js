@@ -250,5 +250,62 @@ function build(jpeg, pages) {
     return concat(locals.concat([central, end]));
   }
 
-  root.PaguuPdf = { invoicePdf, relacionPdf, zipStore, pdfLit };
+  function clipPdf(str, px) {
+    const max = Math.max(3, Math.floor(px / 3.7));
+    const s = String(str == null ? '' : str);
+    return s.length > max ? s.slice(0, max) : s;
+  }
+  function layoutCols(nCols, numericFrom) {
+    const left = 32, width = 530;
+    const nNum = Math.max(0, nCols - numericFrom);
+    const numW = nNum ? Math.min(72, width / Math.max(nCols, 1)) : 0;
+    const textW = width - nNum * numW;
+    const nText = numericFrom;
+    const tw = nText ? textW / nText : width;
+    const cols = [];
+    let x = left;
+    for (let i = 0; i < nCols; i++) {
+      const w = i >= numericFrom ? numW : tw;
+      cols.push({ x, w });
+      x += w;
+    }
+    return cols;
+  }
+  function tablePdf(model) {
+    const headers = model.headers || [];
+    const rows = model.rows || [];
+    const numericFrom = model.numericFrom == null ? headers.length : model.numericFrom;
+    const per = 42;
+    const chunks = [];
+    for (let i = 0; i < rows.length; i += per) chunks.push(rows.slice(i, i + per));
+    if (!chunks.length) chunks.push([]);
+    const cols = layoutCols(headers.length, numericFrom);
+    const pages = chunks.map((slice, pi) => {
+      const p = Painter();
+      p.fill(GREEN[0], GREEN[1], GREEN[2]).rect(0, 806, 595, 28);
+      p.fill(1, 1, 1).text('F2', 11, 32, 816, clipPdf(model.title || 'Libro', 360));
+      p.fill(MUT[0], MUT[1], MUT[2]);
+      p.text('F1', 8, 32, 788, clipPdf(model.subtitle || '', 340));
+      p.text('F1', 8, 430, 788, 'Pagina ' + (pi + 1) + ' / ' + chunks.length);
+      p.fill(GREEN[0], GREEN[1], GREEN[2]).rect(28, 766, 539, 14);
+      p.fill(1, 1, 1);
+      headers.forEach((h, i) => p.text('F2', 7, cols[i].x, 770, clipPdf(h, cols[i].w)));
+      let y = 750;
+      p.fill(INK[0], INK[1], INK[2]);
+      for (const row of slice) {
+        for (let i = 0; i < headers.length; i++) {
+          const text = clipPdf(row[i], cols[i].w);
+          if (i >= numericFrom) p.text('F1', 7, cols[i].x + Math.max(0, cols[i].w - text.length * 3.6 - 2), y, text);
+          else p.text('F1', 7, cols[i].x, y, text);
+        }
+        y -= 12;
+      }
+      p.fill(MUT[0], MUT[1], MUT[2]).text('F1', 7, 32, 36, clipPdf(model.note || '', 150));
+      if (model.note && model.note.length > 90) p.text('F1', 7, 32, 26, clipPdf(model.note.slice(90), 150));
+      return p.out();
+    });
+    return build(null, pages);
+  }
+
+  root.PaguuPdf = { invoicePdf, relacionPdf, tablePdf, zipStore, pdfLit };
 })(typeof window !== 'undefined' ? window : globalThis);
